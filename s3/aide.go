@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/cleardataeng/aidews"
+
+	"github.com/aws/aws-sdk-go/aws/awserr"
 )
 
 // Service for reading and writing to the given bucket.
@@ -24,6 +26,17 @@ type Service struct {
 
 	// svc is the S3API client.
 	svc s3iface.S3API
+}
+
+// ReaderService is an interface that gets implemented by readers, and easily testable
+type ReaderService interface {
+	Read(string) (*io.ReadCloser, error)
+}
+
+// Object represents an S3 object retrieved from s3
+type Object struct {
+	Key string
+	Svc ReaderService
 }
 
 // New returns a pointer to a new Service.
@@ -50,17 +63,14 @@ func (svc *Service) Put(key string, content io.Reader) (*s3.PutObjectOutput, err
 	return svc.svc.PutObject(in)
 }
 
+// ReadObject gets the actual object of the key in the receiver
+func (r *Object) ReadObject() (*io.ReadCloser, error) {
+	return r.Svc.Read(r.Key)
+}
+
 // Read gets the object from the bucket at the key.
 func (svc *Service) Read(key string) (*io.ReadCloser, error) {
-	in := &s3.GetObjectInput{
-		Bucket: aws.String(svc.name),
-	}
-	in.SetKey(key)
-	res, err := svc.svc.GetObject(in)
-	if err != nil {
-		return nil, err
-	}
-	return &res.Body, nil
+	return read(svc.name, key, svc.svc)
 }
 
 // ReadUnmarshal gets the object from the bucket at the key and unmarshals into out.
@@ -76,6 +86,38 @@ func (svc *Service) ReadUnmarshal(key string, out interface{}) error {
 	return json.Unmarshal(data, out)
 }
 
+// ListObjects list the requested number of items in a bucket
+func (svc *Service) ListObjects(maxObjects uint64) ([]Object, error) {
+	input := &s3.ListObjectsInput{
+		Bucket:  aws.String(svc.name),
+		MaxKeys: aws.Int64(int64(maxObjects)),
+	}
+
+	result, err := svc.svc.ListObjects(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeNoSuchBucket:
+				return nil, aerr
+			default:
+				return nil, aerr
+			}
+		} else {
+			return nil, err
+		}
+		return nil, err
+	}
+
+	contents := result.Contents
+	var readers []Object
+	for _, v := range contents {
+		reader := Object{Key: *v.Key, Svc: svc}
+		readers = append(readers, reader)
+	}
+
+	return readers, nil
+}
+
 // SetACL sets the ACL with which the objects will be stored.
 func (svc *Service) SetACL(v *string) {
 	svc.acl = v
@@ -84,4 +126,16 @@ func (svc *Service) SetACL(v *string) {
 // SetSSE sets the server side encryption string for the bucket.
 func (svc *Service) SetSSE(v *string) {
 	svc.sse = v
+}
+
+func read(name string, key string, s3Client s3iface.S3API) (*io.ReadCloser, error) {
+	in := &s3.GetObjectInput{
+		Bucket: aws.String(name),
+	}
+	in.SetKey(key)
+	res, err := s3Client.GetObject(in)
+	if err != nil {
+		return nil, err
+	}
+	return &res.Body, nil
 }
