@@ -4,7 +4,7 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go/service/s3"
-	aideS3 "github.com/cleardataeng/aidews/s3"
+	aideS3 "github.com/yousefcodes/aidews/s3"
 )
 
 // Service reads and writes to the given bucket.
